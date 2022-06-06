@@ -39,6 +39,7 @@ class RidgeRegression:
             return 1./self.n*self.A.T @ (self.A @ x - self.b)+ self.lambd * x
         else:
             index = indices[0]
+            # index = np.random.choice(self.n)
             a_i = self.A[index,::].reshape((-1,1))
             b_i = self.b[index].squeeze()
             return a_i.reshape((-1,1)) * ((a_i*x).sum() - b_i)+ self.lambd * x
@@ -134,6 +135,7 @@ class RidgeRegression:
             
         u = torch.linalg.cholesky(hs)
         v = -torch.cholesky_solve(g, u)
+        # v = -torch.pinverse(hs) @ g
         
         s = self.line_search(x, v, g)
         x = x + s*v
@@ -174,7 +176,7 @@ class RidgeRegression:
         return x, losses, np.cumsum(times)
 
 
-    def ihs_svrn(self, sketch_size, sketch='rrs', nnz=.1, n_local = 0, n_iter=10, scheme='no averaging', sampling='per stage',with_vr=True,s=1,stop_averaging=0):
+    def ihs_svrn(self, sketch_size, sketch='rrs', nnz=.1, n_local = 0, n_iter=10, scheme='no averaging', sampling='per stage',with_vr=True,s=1,stop_averaging=0,permanent_switch=False):
                 
         x = 1./np.sqrt(self.d) * torch.randn(self.d, self.c).to(self.device)
         hs = torch.zeros(self.d,self.d).to(self.device)
@@ -255,7 +257,7 @@ class RidgeRegression:
                 v = x - x0                
                 s_global = self.line_search(x0, v, g0)
                 x = x0 + s_global*v
-                if not with_vr: s_global = 1
+                if not with_vr or permanent_switch: s_global = 1
 
             times.append(time()-start)
             losses.append(self.loss(x).cpu().numpy().item())
@@ -274,9 +276,6 @@ class RidgeRegression:
     def svrg(self, m, n_iter=100, s=0.01, batch_size=10):
         
         x = 1./np.sqrt(self.d) * torch.randn(self.d, self.c).to(self.device)
-        #A_full = self.A
-        #b_full = self.b
-        #n_full = self.n
 
         losses = [self.loss(x).cpu().numpy().item()]
         times = [0.]
@@ -290,17 +289,11 @@ class RidgeRegression:
 
             for j in range(m):
                 batch_indices = np.random.choice(n_full, batch_size, replace=False)
-                #self.A = A_full[batch_indices,::]
-                #self.b = b_full[batch_indices]
-                #self.n = batch_size
                 
                 g_sto = self.grad(x, indices = batch_indices)
                 g_sto0 = self.grad(x0, indices = batch_indices)
                 x = x - s*(g_sto - g_sto0 + g)
             
-            #self.A = A_full
-            #self.b = b_full
-            #self.n = n_full
             times.append(time()-start)
             losses.append(self.loss(x).cpu().numpy().item())
             if np.sum(times) > self.MAX_TIME or losses[-1] < self.MIN_LOSS:

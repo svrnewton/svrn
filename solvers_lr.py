@@ -89,6 +89,14 @@ class LogisticRegression:
     def log_weight(self, iter_num):
         return (iter_num) ** np.log(iter_num+2)
 
+    def weight(self, iter_num, scheme="unweighted"):
+        if scheme == "poly":
+            return self.poly_weight(iter_num)
+        elif scheme == "log":
+            return self.log_weight(iter_num)
+        else:
+            return self.uniform_weight(iter_num)
+
     def sqrt_hess(self, x):
         v_ = torch.exp(self.b * (self.A @ x))
         return 1./np.sqrt(self.n)*torch.sqrt(v_) / (1+v_)
@@ -117,6 +125,7 @@ class LogisticRegression:
             H = self.hessian(x)
             u = torch.linalg.cholesky(H)
             v = -torch.cholesky_solve(g, u)
+            # v = -torch.pinverse(H) @ g
             delta = - (g * v).sum()
             if delta < eps:
                 break
@@ -170,6 +179,7 @@ class LogisticRegression:
             
         u = torch.linalg.cholesky(hs)
         v = -torch.cholesky_solve(g, u)
+        # v = -torch.pinverse(hs) @ g
         
         s = self.line_search(x, v, g)
         x = x + s*v
@@ -208,7 +218,7 @@ class LogisticRegression:
         return x, losses, np.cumsum(times)
 
 
-    def ihs_svrn(self, sketch_size, sketch='rrs', nnz=.1, n_local = 0, n_iter=10, scheme='unweighted',s=1):
+    def ihs_svrn(self, sketch_size, sketch='rrs', nnz=.1, n_local = 0, n_iter=10, scheme='no averaging', sampling='per stage',with_vr=True,s=1):
                 
         x = 1./np.sqrt(self.d) * torch.randn(self.d, self.c).to(self.device)
         hs = torch.zeros(self.d,self.d).to(self.device)
@@ -224,6 +234,12 @@ class LogisticRegression:
 
         batch_size = int(self.n / n_local)
         print("SVRN with batch_size=" + str(batch_size) + " and n_local=" + str(n_local)+"\n")
+
+        if sampling == 'once':
+            batch_indices = np.random.choice(self.n, batch_size, replace=False)
+            A_batch = A_full[batch_indices,::]
+            b_batch = b_full[batch_indices]
+
         s_global = 0
         
         for i in range(n_iter):
@@ -233,13 +249,13 @@ class LogisticRegression:
             
             hsqrt = self.sqrt_hess(x).reshape((-1,1))
             sa = SKETCH_FN[sketch](hsqrt * self.A, sketch_size, nnz=nnz)
-            if scheme == 'unweighted':
-                w_old = self.uniform_weight(i)
-                w = self.uniform_weight(i + 1)
+            if scheme == 'no averaging':
+                hs = sa.T @ sa + self.lambd * torch.eye(self.d).to(self.device)
+            else:
+                w_old = self.weight(i,scheme=scheme)
+                w = self.weight(i+1,scheme=scheme)
                 hs_ = sa.T @ sa + self.lambd * torch.eye(self.d).to(self.device)
                 hs = (w_old / w) * hs + (1 - w_old / w) * hs_
-            else:
-                hs = sa.T @ sa + self.lambd * torch.eye(self.d).to(self.device)
             u = torch.linalg.cholesky(hs)          
 
             if s_global < 1:
@@ -248,14 +264,27 @@ class LogisticRegression:
                 x = x + s_global*v
             else:                
                 x0 = x.clone().detach()
-                batch_indices = np.random.choice(n_full, batch_size, replace=False) 
-                self.A = A_full[batch_indices,::]
-                self.b = b_full[batch_indices]
-                self.n = batch_size
+                if sampling == 'once':
+                    self.A = A_batch
+                    self.b = b_batch
+                    self.n = batch_size
+                elif sampling == 'per stage':
+                    batch_indices = np.random.choice(n_full, batch_size, replace=False)
+                    self.A = A_full[batch_indices,::]
+                    self.b = b_full[batch_indices]
+                    self.n = batch_size
                 for j in range(n_local):
-                    ghat = self.grad(x)            
-                    ghat0 = self.grad(x0)
-                    g = ghat - ghat0 + g0
+                    if sampling == 'per step':
+                        batch_indices = np.random.choice(n_full, batch_size, replace=False)
+                        ghat = self.grad(x,indices=batch_indices)            
+                        ghat0 = self.grad(x0,indices=batch_indices)
+                    else:
+                        ghat = self.grad(x)
+                        ghat0 = self.grad(x0)
+                    if with_vr:
+                        g = ghat - ghat0 + g0
+                    else:
+                        g = ghat
                     v = -torch.cholesky_solve(g, u)
                     x = x + s*v
                     
@@ -299,6 +328,9 @@ class LogisticRegression:
 
             for j in range(m):
                 batch_indices = np.random.choice(n_full, batch_size, replace=False)
+                #self.A = A_full[batch_indices,::]
+                #self.b = b_full[batch_indices]
+                #self.n = batch_size
                 
                 g_sto = self.grad(x, indices = batch_indices)
                 g_sto0 = self.grad(x0, indices = batch_indices)
@@ -320,5 +352,4 @@ class LogisticRegression:
         losses /= losses[0]
             
         return x, losses, np.cumsum(times)
-    
     

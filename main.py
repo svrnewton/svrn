@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import sys, os
 import codecs, json
 
+from sketches import hadamard
 from generate_dataset import load_data
 from solvers_lr import LogisticRegression
 from solvers_ls import RidgeRegression
@@ -45,6 +46,7 @@ def plot_loss_vs_iters(losses, times, sketches, schemes, PARAMS):
     plt.xlabel('Iteration')
     plt.ylabel('Error')
     plt.yscale('log')
+    # plt.xticks(np.arange(times[k].shape[0]),np.arange(times[k].shape[0]))
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
     plt.savefig(OUTPUT_DIR + '/loss_vs_iters.png')
@@ -88,75 +90,83 @@ def main():
     d = int(sys.argv[4]) # num features
     m = int(sys.argv[5]) # sketch size
     n_trials = int(sys.argv[6])
-    np.random.seed(2022)
     if d > n:
         print("num features should be less than num datapoints. " + \
         "Will continue running but this setup doesn't make a lot of sense.")
     if m >= n:
         print("sketch size is not smaller than original matrix. " + \
         "Will continue running but this setup doesn't make a lot of sense.")
-
-    kappa = 10
     
     sketches = ['rrs']
     schemes = ['unweighted']
-    lambd = 1e-8 
+    lambd = 1e-8 # 1e-8
     MAX_TIME = 400
-    MIN_LOSS = 1e-16
-    PARAMS = {"dataset" : dataset, "MAX_TIME" : MAX_TIME, "CROP_TIME" : 30, "CROP_ITER" : 15, "MIN_LOSS" : 2e-13, "n_trials" : n_trials, "dimensions" : '( d=' + str(d) + ' )'}
-    if dataset == "Synthetic Data":
-        PARAMS['dimensions'] = '( d=' + str(d) + ', cond=' + str(int(kappa)) + ' )'
+    MIN_LOSS = 1e-15
+    PARAMS = {"dataset" : dataset, "MAX_TIME" : MAX_TIME, "CROP_TIME" : 30, "CROP_ITER" : 23, "MIN_LOSS" : 2e-8, "n_trials" : n_trials, "dimensions" : '( d=' + str(d) + ' )'}
+    if dataset.startswith("Synthetic") or dataset.startswith("High Coherence"):
+        PARAMS['dimensions'] = '( n=' + str(int(n/1000)) + 'k, d=' + str(d) + ' )'
     PARAMS["OUTPUT_DIR"] = "output" + '_' + experiment + '/' + PARAMS["dataset"] + '_n='+str(n)+'_d='+str(d)+'_m='+str(m)
-    PARAMS["MARKERS"] = ['g--','y:','r-.','b-','o-','^-','>-','<-']
-    if experiment == "least_squares_noaveraging":
-        PARAMS["MARKERS"] = ['g-','r-','g--','r--','g-.','r-.','g:','r:']
+    PARAMS["MARKERS"] = ['b-','y:','r--','g-.','o-','^-','>-','<-']
+    if experiment == "least_squares_averaging":
+        PARAMS["MARKERS"] = ['r-','g-','r--','g--','r-.','g-.','r:','g:']
+    elif experiment == "svrn":
+        PARAMS["MARKERS"] = ['b-','y:','r--','g-.','y:','o-','^-','>-','<-']
+    elif experiment == "least_squares_coherence":
+        PARAMS["MARKERS"] = ['r-','g-','r--','g--','^-','>-','<-']
+    elif experiment == "least_squares_sampling":
+        PARAMS["MARKERS"] = ['r--','y:','g-.','b-']
+    elif experiment =="least_squares_vr":
+        PARAMS["MARKERS"] = ['r--','y:','g-.','b-']
         
+    kappa = 10
+
     if n_trials > 0:
-        A, b = load_data(dataset=dataset,n=n, d=d, kappa=kappa)
+        A, b = load_data(dataset=dataset,n=n, d=d, kappa=kappa,high_coherence=False)
         n, d = A.shape
         nnz = d/n
     
         n_iter_newton = 20
         n_iter_svrg = 25
         n_iter_svrn = 25
-        n_iter_ihs = {'less_sparse': 25, 'gaussian': 25, 'rrs': 25, 'srht': 25}
+        n_iter_ihs = 25
     
         losses = {}
         times = {}
 
         # preprocessing step
-        if experiment in ["least_squares_sampling","least_squares_vr","least_squares_noaveraging"]:
+        if experiment.startswith("least_squares"):
             lreg = RidgeRegression(A,b,lambd, MAX_TIME, MIN_LOSS)
             lreg.solve_exactly()
         else:
             lreg = LogisticRegression(A, b, lambd, MAX_TIME, MIN_LOSS)
-            _, _ = lreg.solve_exactly(n_iter=20, eps=1e-15)
+            _, _ = lreg.solve_exactly(n_iter=20, eps=1e-16)
 
         if experiment == "svrn":
-            losses["newton"] = np.zeros(n_iter_newton+1)
-            times["newton"] = np.zeros(n_iter_newton+1)
-            losses["svrn"] = np.zeros(n_iter_svrn+1)
-            times["svrn"] = np.zeros(n_iter_svrn+1)
-            for sketch in sketches:
-                for scheme in schemes:
-                    losses[sketch + ' ' + scheme] = np.zeros(n_iter_ihs[sketch]+1)
-                    times[sketch + ' ' + scheme] = np.zeros(n_iter_ihs[sketch]+1)
+            sketch = sketches[0]
+            scheme = schemes[0]
+            NEWTON = "Newton"
+            SN = "SN-HA"
+            SVRN = "SVRN-HA"
+            losses[NEWTON] = np.zeros(n_iter_newton+1)
+            times[NEWTON] = np.zeros(n_iter_newton+1)
+            losses[SN] = np.zeros(n_iter_ihs+1)
+            times[SN] = np.zeros(n_iter_ihs+1)
+            losses[SVRN] = np.zeros(n_iter_svrn+1)
+            times[SVRN] = np.zeros(n_iter_svrn+1)
             for _ in range(n_trials):
                 print("trial number " + str(_) + '\n')
                 _, losses_newton, times_newton = lreg.newton(n_iter_newton)
-                losses["newton"] += losses_newton / n_trials
-                times["newton"] += times_newton / n_trials
-                _, losses_svrn, times_svrn = lreg.ihs_svrn(sketch_size=m,sketch=sketches[0], nnz=nnz, n_iter=n_iter_svrn,scheme=schemes[0])
-                losses["svrn"] += losses_svrn / n_trials
-                times["svrn"] += times_svrn / n_trials
-                for sketch in sketches:
-                    for scheme in schemes:
-                        _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs[sketch], scheme=scheme)
-                        losses[sketch + ' ' + scheme] += losses_ / n_trials
-                        times[sketch + ' ' + scheme] += times_ / n_trials
+                losses[NEWTON] += losses_newton / n_trials
+                times[NEWTON] += times_newton / n_trials
+                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs, scheme=scheme)
+                losses[SN] += losses_ / n_trials
+                times[SN] += times_ / n_trials
+                _, losses_svrn, times_svrn = lreg.ihs_svrn(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_svrn,scheme=scheme)
+                losses[SVRN] += losses_svrn / n_trials
+                times[SVRN] += times_svrn / n_trials
         elif experiment == "svrg":
             steps = list(map(float,sys.argv[7].split())) if len(sys.argv) >= 8 else [0.03, 0.1, 0.3, 1.0]
-            sizes = [m,2*m,3*m]
+            sizes = [m,2*m]
             print(steps)
             for _ in range(n_trials):
                 print("trial number " + str(_) + '\n')
@@ -174,15 +184,15 @@ def main():
             scheme = schemes[0]
             SN = sketch+' '+scheme
             samplings = ['once', 'per stage', 'per step']            
-            losses[SN] = np.zeros(n_iter_ihs[sketch]+1)
-            times[SN] = np.zeros(n_iter_ihs[sketch]+1)
+            losses[SN] = np.zeros(n_iter_ihs+1)
+            times[SN] = np.zeros(n_iter_ihs+1)
             for sampling in samplings:
                 SVRN = "svrn (sampling "+sampling+')'
                 losses[SVRN] = np.zeros(n_iter_svrn+1)
                 times[SVRN] = np.zeros(n_iter_svrn+1)
             for _ in range(n_trials):
                 print("trial number " + str(_) + '\n')
-                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs[sketch], scheme=scheme)
+                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs, scheme=scheme)
                 losses[SN] += losses_ / n_trials
                 times[SN] += times_ / n_trials
                 for sampling in samplings:
@@ -196,15 +206,15 @@ def main():
             SN = 'SN-HA'
             SNGS = 'SNGS-HA'
             SVRN = 'SVRN-HA'
-            losses[SN] = np.zeros(n_iter_ihs[sketch]+1)
-            times[SN] = np.zeros(n_iter_ihs[sketch]+1)
-            losses[SNGS] = np.zeros(n_iter_svrn+1)
-            times[SNGS] = np.zeros(n_iter_svrn+1)
+            losses[SN] = np.zeros(n_iter_ihs+1)
+            times[SN] = np.zeros(n_iter_ihs+1)
             losses[SVRN] = np.zeros(n_iter_svrn+1)
             times[SVRN] = np.zeros(n_iter_svrn+1)
+            losses[SNGS] = np.zeros(n_iter_svrn+1)
+            times[SNGS] = np.zeros(n_iter_svrn+1)
             for _ in range(n_trials):
                 print("trial number " + str(_) + '\n')
-                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs[sketch], scheme=scheme)
+                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs, scheme=scheme)
                 losses[SN] += losses_ / n_trials
                 times[SN] += times_ / n_trials
                 _, losses_svrn, times_svrn = lreg.ihs_svrn(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_svrn,scheme=scheme,sampling='per step',with_vr=False)
@@ -220,8 +230,8 @@ def main():
             for size in sizes:
                 SVRN = "SVRN (h=" + str(size) + ")"
                 SN = "SN (h=" + str(size) + ")"
-                losses[SN] = np.zeros(n_iter_ihs[sketch]+1)
-                times[SN] = np.zeros(n_iter_ihs[sketch]+1)
+                losses[SN] = np.zeros(n_iter_ihs+1)
+                times[SN] = np.zeros(n_iter_ihs+1)
                 losses[SVRN] = np.zeros(n_iter_svrn+1)
                 times[SVRN] = np.zeros(n_iter_svrn+1)
             for _ in range(n_trials):
@@ -229,13 +239,48 @@ def main():
                 for size in sizes:
                     SVRN = "SVRN (h=" + str(size) + ")"
                     SN = "SN (h=" + str(size) + ")"
-                    _, losses_, times_ = lreg.ihs(sketch_size=size,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs[sketch], scheme=scheme,stop_averaging=1)
+                    _, losses_, times_ = lreg.ihs(sketch_size=size,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs, scheme=scheme,stop_averaging=1)
                     losses[SN] += losses_ / n_trials
                     times[SN] += times_ / n_trials
                     _, losses_svrn, times_svrn = lreg.ihs_svrn(sketch_size=size,sketch=sketch, nnz=nnz, n_iter=n_iter_svrn,scheme=scheme,sampling='per step',stop_averaging=1)
                     losses[SVRN] += losses_svrn / n_trials
                     times[SVRN] += times_svrn / n_trials
-            
+        elif experiment == "least_squares_coherence":
+            sketch = 'rrs'
+            scheme = 'unweighted'
+            SN = 'SN-HA'
+            SNlev = 'SN-HA-RHT'
+            SVRN = 'SVRN-HA'
+            SVRNlev = 'SVRN-HA-RHT'
+            losses[SN] = np.zeros(n_iter_ihs+1)
+            times[SN] = np.zeros(n_iter_ihs+1)
+            losses[SVRN] = np.zeros(n_iter_svrn+1)
+            times[SVRN] = np.zeros(n_iter_svrn+1)
+            losses[SNlev] = np.zeros(n_iter_ihs+1)
+            times[SNlev] = np.zeros(n_iter_ihs+1)
+            losses[SVRNlev] = np.zeros(n_iter_svrn+1)
+            times[SVRNlev] = np.zeros(n_iter_svrn+1)
+            for _ in range(n_trials):
+                print("trial number " + str(_) + '\n')
+                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs, scheme=scheme)
+                losses[SN] += losses_ / n_trials
+                times[SN] += times_ / n_trials
+                _, losses_svrn, times_svrn = lreg.ihs_svrn(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_svrn,scheme=scheme,sampling='per step')
+                losses[SVRN] += losses_svrn / n_trials
+                times[SVRN] += times_svrn / n_trials
+
+            lreg.A, v = hadamard(lreg.A, return_diag=True)
+            lreg.n, lreg.d = lreg.A.shape
+            lreg.b = hadamard(lreg.b, diag = v)
+    
+            for _ in range(n_trials):
+                print("trial number " + str(_) + '\n')
+                _, losses_, times_ = lreg.ihs(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_ihs, scheme=scheme)
+                losses[SNlev] += losses_ / n_trials
+                times[SNlev] += times_ / n_trials
+                _, losses_svrn, times_svrn = lreg.ihs_svrn(sketch_size=m,sketch=sketch, nnz=nnz, n_iter=n_iter_svrn,scheme=scheme,sampling='per step',permanent_switch=True)
+                losses[SVRNlev] += losses_svrn / n_trials
+                times[SVRNlev] += times_svrn / n_trials
             
 
             
@@ -243,9 +288,11 @@ def main():
     else:
         losses, times = load_results(PARAMS)
 
-    times = {k:v[0:np.argmax(v)] for (k,v) in times.items()}
+
+    times = {k:v[0:np.argmax(v)+1] for (k,v) in times.items()}
     losses = {k:v[0:len(times[k])] for (k,v) in losses.items()}
-    
+
+        
     # plotting
     plot_loss_vs_time(losses, times, sketches, schemes, PARAMS)    
     plot_loss_vs_iters(losses, times, sketches, schemes, PARAMS)
