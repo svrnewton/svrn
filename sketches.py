@@ -18,7 +18,7 @@ def _hadamard(matrix):
     return torch.cat((_t1, _t2), 0)
 
 
-def hadamard(matrix):
+def hadamard(matrix, diag = None, return_diag = False):
     if matrix.ndim == 1:
         matrix = matrix.reshape((-1,1))
     n = matrix.shape[0]
@@ -27,9 +27,10 @@ def hadamard(matrix):
         pad_matrix = torch.zeros(new_dim-n, matrix.shape[1]).to(matrix.device)
         matrix = torch.cat((matrix, pad_matrix))
     n = matrix.shape[0]
-    diag = np.random.choice([-1,1], n, replace=True).reshape((-1,1))
-    matrix = torch.Tensor(diag).to(matrix.device) * matrix
-    return 1./np.sqrt(n) * _hadamard(matrix)
+    if diag is None:
+        diag = torch.tensor(np.random.choice([-1,1], n, replace=True)).reshape((-1,1)).to(matrix.device)
+    matrix = 1./np.sqrt(n) * _hadamard(diag * matrix)    
+    return (matrix, diag) if return_diag else matrix
 
 
 def rrs(matrix, sketch_size, nnz=None):
